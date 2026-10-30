@@ -1,0 +1,27 @@
+주제                   프로젝트      위치  member%  scope%  시험셋 후보(위치 100~500, 중간값)
+qt                     12    6723      6.0     6.8  qt__imiric__qml-niri
+emulator               12    6622     12.8     8.4  emulator__lalitshankarch__rvcore
+esp32                  12    6543     13.3    10.8  esp32__Ohhellboy__Draftor
+sdl2                   12    6443     15.0    11.8  sdl2__PixelRoot32-Game-Engine__PixelRoot32-Game-Engine
+raytracer              12    6358     11.6    10.3  raytracer__TzuChieh__Photon-v2
+embedded               11    6217     10.5     8.9  embedded__philips-software__amp-embedded-infra-lib
+cli                    12    6068     12.8    14.4  cli__HalanoSiblee__tuicharmap
+imgui                  12    5956     12.7    13.9  imgui__striderZA__Tiny-RF-Simulator
+opengl                 12    5900     11.7    11.5  opengl__aliakseis__FFmpegPlayer
+chess                  12    5837     10.3    12.0  chess__Disservin__fastchess
+pathfinding            12    5746     15.1     8.8  pathfinding__IbrahimSquared__visibility-heuristic-path-planner
+physics-simulation     12    5706     11.6    11.7  physics-simulation__thfProjects__Physecs
+game                   12    5308      8.9    20.5  game__Relintai__pandemonium_engine
+sfml                   12    5003      7.5    17.4  sfml__MiguelMJ__Candle
+opencv                 12    4630      6.5     9.8  opencv__AxisCommunications__opc-ua-colorchecker-acap
+robotics               11    4629      9.1    15.7  robotics__gazebosim__gz-msgs
+audio                  12    4545     12.1    13.7  audio__anira-project__anira
+stm32                  12    4234     11.5    17.4  stm32__xyntos-ch__CANoopEn
+arduino                10    3936      9.8     8.8  arduino__VIPnytt__Frekvens
+wxwidgets              12    2827      8.0     8.7  wxwidgets__lszl84__wx_transforms_tutorial
+university              6    2655     12.6     2.3  university__artyom7774__Schedule
+gtk                     5    2057      8.5     9.2  gtk__mkay__gtkdecor
+codecontests            1    1928     13.5     0.5  -
+coursework              1     460     29.6     0.0  coursework__rezwan-ahmed-l7__DSA-1
+합계 249프로젝트 116331위치; member 11.1% scope 11.4%
+프로젝트당 위치 최소/중앙/최대 0 557 1928 | 0개: 7

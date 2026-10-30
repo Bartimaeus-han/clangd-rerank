@@ -1,0 +1,171 @@
+{
+  "name": "clangd-rerank",
+  "displayName": "clangd Rerank",
+  "description": "Reorders clangd completion items with a small learned ranker (LightGBM + fine-tuned Kev-0.8B) through an LSP proxy. The preselected item is right 3-4x more often.",
+  "version": "0.1.0",
+  "publisher": "bartimaeus",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "clangd",
+    "C++",
+    "completion",
+    "ranking",
+    "IntelliSense"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "extensionDependencies": [
+    "llvm-vs-code-extensions.vscode-clangd"
+  ],
+  "activationEvents": [
+    "onLanguage:c",
+    "onLanguage:cpp",
+    "onLanguage:cuda-cpp",
+    "onLanguage:objective-c",
+    "onLanguage:objective-cpp",
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "clangdRerank.enable",
+        "title": "clangd Rerank: Enable"
+      },
+      {
+        "command": "clangdRerank.disable",
+        "title": "clangd Rerank: Disable (restore original clangd.path)"
+      },
+      {
+        "command": "clangdRerank.toggle",
+        "title": "clangd Rerank: Toggle"
+      },
+      {
+        "command": "clangdRerank.setJevApiKey",
+        "title": "clangd Rerank: Set Jev API key (TypeSafe)"
+      },
+      {
+        "command": "clangdRerank.clearJevApiKey",
+        "title": "clangd Rerank: Clear Jev API key"
+      },
+      {
+        "command": "clangdRerank.showLog",
+        "title": "clangd Rerank: Show proxy log"
+      },
+      {
+        "command": "clangdRerank.showStats",
+        "title": "clangd Rerank: Show usage statistics (R@1 of what you actually typed)"
+      },
+      {
+        "command": "clangdRerank.restart",
+        "title": "clangd Rerank: Rewrite launcher and restart clangd"
+      }
+    ],
+    "configuration": {
+      "title": "clangd Rerank",
+      "properties": {
+        "clangdRerank.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine-overridable",
+          "description": "Route clangd through the reranking proxy (sets clangd.path to the bundled launcher)."
+        },
+        "clangdRerank.backend": {
+          "type": "string",
+          "enum": [
+            "local",
+            "jev",
+            "stage2Only"
+          ],
+          "enumDescriptions": [
+            "Local Kev server (python -m kev.serve --run <checkpoint>). Code never leaves the machine.",
+            "Jev hosted API (api.typesafe.ai). Sends the 40 lines before the cursor and the candidate names to TypeSafe. Needs an API key (command: Set Jev API key).",
+            "Only the feature-based LightGBM stage (2-3 ms, no model server). Weaker, but no dependencies."
+          ],
+          "default": "local",
+          "scope": "machine-overridable",
+          "description": "Which third-stage model scores the candidates."
+        },
+        "clangdRerank.localServerUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8009",
+          "scope": "machine-overridable",
+          "description": "Base URL of the local Kev (System One compatible) server."
+        },
+        "clangdRerank.clangdPath": {
+          "type": "string",
+          "default": "clangd",
+          "scope": "machine-overridable",
+          "description": "The real clangd executable the proxy launches. If clangd.path already pointed somewhere when the extension was enabled, that value is used."
+        },
+        "clangdRerank.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "scope": "machine-overridable",
+          "description": "Python 3.9+ used to run the proxy. Standard library only, no packages needed."
+        },
+        "clangdRerank.stage2ModelPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "LightGBM text model for stage 2. Empty = the bundled model."
+        },
+        "clangdRerank.maxCandidates": {
+          "type": "integer",
+          "default": 60,
+          "minimum": 2,
+          "maximum": 255,
+          "scope": "machine-overridable",
+          "description": "How many stage-2 top candidates the model scores. 30 and 60 measured the same accuracy; 60 covers more positions."
+        },
+        "clangdRerank.contextLines": {
+          "type": "integer",
+          "default": 40,
+          "minimum": 5,
+          "maximum": 200,
+          "scope": "machine-overridable",
+          "description": "Lines before the cursor sent to the model (40 measured best)."
+        },
+        "clangdRerank.timeoutMs": {
+          "type": "integer",
+          "default": 400,
+          "minimum": 50,
+          "scope": "machine-overridable",
+          "description": "If the model does not answer in time, the stage-2 order (or clangd's order) is returned unchanged."
+        },
+        "clangdRerank.setSuggestSelectionFirst": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine-overridable",
+          "description": "Set editor.suggestSelection to 'first' for C/C++ so VS Code's own 'recently used' memory does not undo the reranking (memory + reranking measured worse than reranking alone)."
+        },
+        "clangdRerank.recordStats": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine-overridable",
+          "description": "Record, for every completion site, the identifier you ended up writing and its rank in clangd's / stage-2 / final order (local JSONL in the extension's global storage; no code text). View with 'clangd Rerank: Show usage statistics'."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.0",
+    "typescript": "^5.4.0"
+  }
+}

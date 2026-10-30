@@ -1,0 +1,5 @@
+val.jsonl: n=200 R@1=80.5% 지연 중앙값 50ms p90 57ms 최소 46ms 실패 0
+s2k60_cli.jsonl: n=200 R@1=79.0% 지연 중앙값 51ms p90 57ms 최소 46ms 실패 0
+s2k30_cli.jsonl: n=200 R@1=80.5% 지연 중앙값 50ms p90 55ms 최소 46ms 실패 0
+s2k60_lz4.jsonl: n=200 R@1=79.5% 지연 중앙값 52ms p90 63ms 최소 46ms 실패 0
+s2k30_lz4.jsonl: n=200 R@1=84.5% 지연 중앙값 52ms p90 60ms 최소 47ms 실패 0

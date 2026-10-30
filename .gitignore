@@ -1,0 +1,8 @@
+# 큰 산출물: 저장소에는 넣지 않고 폴더에만 보존
+models/
+eval_data/
+results/pred-*.jsonl
+vscode-extension/node_modules/
+vscode-extension/out/
+*.vsix
+jev.env
