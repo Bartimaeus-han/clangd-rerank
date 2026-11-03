@@ -239,7 +239,7 @@ def site_open(uri, line, ch, info):
         return
     key = (uri, line, ch - len(info["typed"]))
     with sites_lock:
-        s = sites.setdefault(key, {"levels": {}, "t": time.time(), "away": False})
+        s = sites.setdefault(key, {"levels": {}, "t": time.time(), "away": False, "kind": info.get("kind", "rerank")})
         s["levels"][len(info["typed"])] = info["orders"]
         if len(sites) > 50:  # 오래된 것부터 정리
             for k in sorted(sites, key=lambda k: sites[k]["t"])[:-50]:
@@ -260,7 +260,10 @@ def site_close(key, text, force=False):
         return
     uri, line, col = key
     word, ltxt = word_at(text, line, col)
-    done = bool(word) and (force or s["away"] or col + len(word) < len(ltxt))
+    if s.get("kind") == "gen":  # 생성 자리: 뒤에 글자가 있어도(자동 괄호·`;`) 수락 후 고칠 수 있으니 자리를 떠날 때까지 기다린다
+        done = bool(word) and (force or s["away"])
+    else:
+        done = bool(word) and (force or s["away"] or col + len(word) < len(ltxt))
     if not done and not (force or (s["away"] and not word)):
         return
     sites.pop(key)
@@ -270,8 +273,10 @@ def site_close(key, text, force=False):
     with open(STATS, "a") as f:
         for typed_len, orders in sorted(s["levels"].items()):
             rank = {k: (o.index(word) + 1 if word in o else None) for k, o in orders.items()}
-            f.write(json.dumps({"t": int(s["t"]), "file": name, "line": line, "typed": typed_len, "gold": word,
-                                "n": len(orders["clangd"]), "rank": rank}) + "\n")
+            rec = {"t": int(s["t"]), "file": name, "line": line, "typed": typed_len, "gold": word, "n": len(orders["clangd"]), "rank": rank}
+            if s.get("kind") == "gen":  # 생성 자리: 제안 목록과 '드롭다운에서 실제 고른 이름'(없으면 무시한 것) 도 남긴다
+                rec.update(kind="gen", gen=orders.get("gen", []), accepted=s.get("accepted"))
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
 def sites_on_change(uri, changes):
@@ -297,7 +302,9 @@ def sites_on_change(uri, changes):
                     col = tail + (col - en["character"])
                     line = st["line"] + nl
                 elif st["line"] == line == en["line"] and col <= st["character"] <= wend + 1:
-                    pass  # 그 단어를 치고 있다 (완성 항목 삽입 포함)
+                    # 그 단어를 치고 있다 (완성 항목 삽입 포함). 생성 제안이 통째로 들어오면 수락으로 기록
+                    if s.get("kind") == "gen" and any(ch["text"] in o.get("gen", ()) for o in s["levels"].values()):
+                        s["accepted"] = ch["text"]
                 else:
                     s["away"] = True
             sites[(uri, line, col)] = s
@@ -366,6 +373,9 @@ def clangd_to_editor(clangd_out, editor_out):
                 try:  # 선언 자리: 재정렬 대신 이름 생성 (clangd 후보는 보통 비었거나 무관하다)
                     typed = typed_prefix(state)
                     gens = generate_names(full_before(uri, line, ch), typed, {it.get("filterText") or it["label"].strip() for it in items})
+                    if gens:
+                        site_open(uri, line, ch, {"typed": typed, "kind": "gen",
+                                                  "orders": {"clangd": [it["label"].strip() for it in items], "gen": gens}})
                 except Exception as e:
                     log(f"gen skipped: {type(e).__name__} {e}")
             elif items:
