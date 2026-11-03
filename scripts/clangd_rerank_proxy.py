@@ -40,6 +40,7 @@ INSTRUCTIONS = "C++ code with a <CURSOR> marker. Which identifier will the progr
 GEN_URL = os.environ.get("RERANK_GEN_URL", "").rstrip("/")   # 비면 생성 끔
 GEN_TIMEOUT = float(os.environ.get("RERANK_GEN_TIMEOUT", "0.8"))
 GEN_N = int(os.environ.get("RERANK_GEN_N", "3"))
+GEN_MAX_LINES = int(os.environ.get("RERANK_GEN_MAX_LINES", "3000"))  # 생성 서버에 보내는 커서 앞 최대 줄 수(서버가 앞부분을 선언 요약으로 줄인다)
 
 STAGE3 = os.environ.get("RERANK_STAGE3", "1") != "0"
 stage2 = None
@@ -85,9 +86,15 @@ def decl_site(state):
     return name not in _NOT_TYPE
 
 
-def generate_names(state, typed, existing):
-    """선언 자리에서 생성 서버에 새 이름을 묻는다. 이미 보이는 심볼과 겹치는 이름은 뺀다(가짜 심볼 방지)."""
-    before = state.rsplit("<CURSOR>", 1)[0]
+def full_before(uri, line, character):
+    """파일 시작부터 커서까지(최대 GEN_MAX_LINES 줄). 생성 서버가 마지막 40줄 앞부분을 선언 요약으로 바꾼다(ctx_enrich)."""
+    lines = docs.get(uri, "").split("\n")
+    cur = lines[line][:character] if line < len(lines) else ""
+    return "\n".join(lines[max(0, line - GEN_MAX_LINES + 1):line] + [cur])
+
+
+def generate_names(before, typed, existing):
+    """선언 자리에서 생성 서버에 새 이름을 묻는다. before = 커서 앞 전체 텍스트(친 글자 포함). 이미 보이는 심볼과 겹치는 이름은 뺀다(가짜 심볼 방지)."""
     if typed:
         before = before[:-len(typed)]
     body = json.dumps({"prefix": before, "typed": typed, "n": GEN_N + 2}).encode()
@@ -358,7 +365,7 @@ def clangd_to_editor(clangd_out, editor_out):
             if state is not None and GEN_URL and decl_site(state):
                 try:  # 선언 자리: 재정렬 대신 이름 생성 (clangd 후보는 보통 비었거나 무관하다)
                     typed = typed_prefix(state)
-                    gens = generate_names(state, typed, {it.get("filterText") or it["label"].strip() for it in items})
+                    gens = generate_names(full_before(uri, line, ch), typed, {it.get("filterText") or it["label"].strip() for it in items})
                 except Exception as e:
                     log(f"gen skipped: {type(e).__name__} {e}")
             elif items:

@@ -197,7 +197,25 @@ exact@1, 접두어 0/1/2글자, 2026-11-03 전체 실행 완료. Haiku exact@5 �
 **(4) 전체 위치 기준 정답률 (후보에 정답 없는 자리까지 포함, 신선셋 3,723곳)**: 0글자 clangd 12.0% → Haiku 생성 1위 61.7%, genmatch 재정렬+생성 60.2%;
 2글자 42.4% → 75.7%(선언 문맥·접두어 맞는 후보 없을 때만 생성 삽입하면 77.4%). 생성이 붙으면 "후보에 정답 없음"으로 깎이던 몫이 대부분 회복된다.
 
-다음: Qwen 전체 결과 → decl 데이터(train_src/train_src2 에서 `collect_newident.py` 로 수집)로 LoRA 파인튜닝 → 프록시에 생성 항목 삽입(설계는 `docs/claude_api_and_ident_gen.md`).
+### Namer v1 학습과 문맥 보강 (2026-11-03)
+
+모델 이름: 재정렬 = **Sorter**(Kev-0.8B v4), 생성 = **Namer**(Qwen3.5-0.8B-Base + LoRA).
+
+- 데이터: `scripts/collect_decl.py`(tree-sitter, clangd 불필요)로 학습 소스 241 저장소에서 선언 자리 147,180건(저장소당 800·이름당 5·파일당 40 상한; local 58k/param 54k/field 25k/global 9k).
+- 학습: `scripts/train_namer.py`(HF transformers+peft, LoRA r16, lr 1e-4, 1 epoch 60,000건, 왼쪽 패딩 + `logits_to_keep` 으로 이름 토큰만 손실, 검증 저장소 10개 분리). 53분. Sorter 서버와 GPU 를 같이 써도 재정렬 중앙값 87ms, p90 150ms.
+- 문맥 보강: `scripts/ctx_enrich.py` — 커서 앞 40줄 바깥의 같은 파일 선언을 `// earlier in this file: ...` 한 줄로 요약해 프롬프트 앞에 붙인다(표준 라이브러리만, 커서 뒤 안 봄). 프록시 `full_before()` 가 파일 시작~커서(최대 `RERANK_GEN_MAX_LINES`=3000줄)를 보내고 `gen_server.py` 가 요약한다(`--no-enrich` 로 끔). `gen_qwen.py --src-root --enrich` 로 평가.
+
+신선 decl 357곳 exact@1 (0/1/2글자; 부분집합 `eval_data/eval_gen_fresh_decl`, new 142곳은 괄호):
+
+| 모델 | 보강 없음 | 보강 있음 |
+|---|---|---|
+| Qwen 기반 | 34.7 / 48.7 / 56.3 (new 26.1) | 36.7 / 51.5 / 58.5 (27.5) |
+| Namer v1 | 35.0 / 48.5 / 55.2 (31.0) | **37.0 / 49.9 / 57.7** (31.7) |
+| Haiku 5.5 | 47.9 / 59.7 / 62.7 (63.4) | - |
+
+LoRA 는 1위 정확도를 못 올리고(exact@5 41.5→47.9, 빈 응답 21→0 만 개선), 보강은 +2%p 로 작지만 전 열에서 일관됐다. 격차는 모델 크기에서 온다고 본다.
+공개 수치와 비교하면: Copilot 인라인 제안 수락률 27~30%(Ziegler 2022; 한 줄 전체), Pythia(IntelliCode, Python 멤버만) top-1 71%/top-5 92% ↔ Sorter 77%/95%, DIRTY 변수명 복원 66%(함수 전체를 보고).
+다음 후보: 더 큰 기반 모델(1.5B/4B) 학습 없이 측정, 보강 프롬프트로 Namer 재학습.
 
 ## 다음 할 일
 

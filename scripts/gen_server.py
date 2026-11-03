@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 """식별자 생성 서버 (프로토타입). 선언 자리에서 커서 앞 문맥을 받아 새 이름 후보를 돌려준다.
 사용: ext/kev/.venv/bin/python scripts/gen_server.py [--port 8010] [--model Qwen/Qwen3.5-0.8B-Base] [--adapter <LoRA 경로>] [--beams 5]
-  POST /v1/gen  {"prefix": "<커서 앞 코드(친 글자 제외)>", "typed": "ab", "n": 3}  →  {"guesses": ["abort_flag", ...], "ms": 312}
+  POST /v1/gen  {"prefix": "<파일 시작~커서 앞 코드(친 글자 제외)>", "typed": "ab", "n": 3}  →  {"guesses": ["abort_flag", ...], "ms": 312}
   GET  /v1/models  (살아 있는지 확인)
 디코딩은 gen_qwen.py 와 같되 한 가지를 고쳤다: 접두어가 없어도 첫 토큰은 식별자 시작 글자로 제한한다
 (기반 모델 기준선에서 0글자 빈 응답 14% 의 원인이 `)` `0` 같은 토큰이 빔을 채우는 것이었다). 키워드는 뺀다.
+프롬프트 = 마지막 --ctx 줄 + 그 앞부분의 선언 요약 한 줄(ctx_enrich.build_prompt, --no-enrich 로 끔).
 HF generate 경로라 한 건 0.2~0.5초. 요청은 한 번에 하나씩 처리한다(락)."""
 import argparse, json, os, re, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from eval_rerank import KEYWORDS  # noqa: E402
+from ctx_enrich import build_prompt  # noqa: E402
 
 IDENT = re.compile(r"^[A-Za-z_]\w*")
 
 
 class Generator:
-    def __init__(self, model, adapter, beams, new_tokens, ctx):
+    def __init__(self, model, adapter, beams, new_tokens, ctx, enrich=True):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.torch = torch
@@ -26,7 +28,7 @@ class Generator:
             from peft import PeftModel
             lm = PeftModel.from_pretrained(lm, adapter).merge_and_unload()
         self.lm = lm.cuda().eval()
-        self.beams, self.new_tokens, self.ctx = beams, new_tokens, ctx
+        self.beams, self.new_tokens, self.ctx, self.enrich = beams, new_tokens, ctx, enrich
         vocab = [self.tok.decode([t]) for t in range(len(self.tok))]
         self.all_ids = list(range(len(self.tok)))
         self.vocab = vocab
@@ -45,7 +47,8 @@ class Generator:
 
     def generate(self, prefix, typed, n):
         tok, torch = self.tok, self.torch
-        prompt = "\n".join(prefix.split("\n")[-self.ctx:])
+        # 마지막 ctx 줄은 그대로, 그 앞은 선언 요약 한 줄로 (ctx_enrich; 프록시가 파일 앞부분까지 보내준다)
+        prompt = build_prompt("\n".join(prefix.split("\n")[-3000:]), self.ctx, self.enrich)
         with self.lock, torch.inference_mode():
             ids = tok(prompt, return_tensors="pt").input_ids.cuda()
             n_in = ids.shape[1]
@@ -78,8 +81,9 @@ def main():
     ap.add_argument("--port", type=int, default=8010); ap.add_argument("--model", default="Qwen/Qwen3.5-0.8B-Base")
     ap.add_argument("--adapter", default=""); ap.add_argument("--beams", type=int, default=5)
     ap.add_argument("--new-tokens", type=int, default=8); ap.add_argument("--ctx", type=int, default=40)
+    ap.add_argument("--no-enrich", action="store_true", help="앞선 선언 요약(ctx_enrich)을 붙이지 않는다")
     a = ap.parse_args()
-    g = Generator(a.model, a.adapter, a.beams, a.new_tokens, a.ctx)
+    g = Generator(a.model, a.adapter, a.beams, a.new_tokens, a.ctx, not a.no_enrich)
     for typed in ("", "c", "co"):  # 워밍업 (첫 요청 커널 컴파일)
         print("warmup", typed, g.generate("#include <string>\nint main() {\n  std::string ", typed, 3), flush=True)
 

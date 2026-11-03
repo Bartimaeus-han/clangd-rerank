@@ -8,6 +8,7 @@ import argparse, json, os, re, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from eval_rerank import KEYWORDS  # noqa: E402
+from ctx_enrich import build_prompt  # noqa: E402
 
 IDENT = re.compile(r"^[A-Za-z_]\w*")
 
@@ -17,11 +18,18 @@ def main():
     ap.add_argument("dir"); ap.add_argument("--limit", type=int, default=0); ap.add_argument("--beams", type=int, default=5)
     ap.add_argument("--ctx", type=int, default=40); ap.add_argument("--model", default="Qwen/Qwen3.5-0.8B-Base")
     ap.add_argument("--new-tokens", type=int, default=8); ap.add_argument("--tag", default="qwen-base")
+    ap.add_argument("--adapter", default="", help="peft LoRA 어댑터 폴더 (Namer 학습본)")
+    ap.add_argument("--src-root", default="", help="샘플의 proj/file 이 있는 소스 루트 (파일 전체의 커서 앞부분을 읽는다)")
+    ap.add_argument("--enrich", action="store_true", help="ctx_enrich.build_prompt: 앞선 선언 요약을 프롬프트 앞에 붙인다 (--src-root 필요)")
     a = ap.parse_args()
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(a.model)
-    lm = AutoModelForCausalLM.from_pretrained(a.model, dtype=torch.bfloat16).cuda().eval()
+    lm = AutoModelForCausalLM.from_pretrained(a.model, dtype=torch.bfloat16)
+    if a.adapter:
+        from peft import PeftModel
+        lm = PeftModel.from_pretrained(lm, a.adapter).merge_and_unload()
+    lm = lm.cuda().eval()
     vocab = [tok.decode([t]) for t in range(len(tok))]
     all_ids = list(range(len(tok)))
     allowed_cache = {}
@@ -47,7 +55,14 @@ def main():
                 before = lv["state"].split("<CURSOR>")[0]
                 if typed:
                     before = before[:-len(typed)]
-                prompt = "\n".join(before.split("\n")[-a.ctx:])
+                if a.src_root:  # 파일 전체의 커서 앞부분 (state 는 마지막 수십 줄뿐)
+                    path = os.path.join(a.src_root, s["proj"], s["file"])
+                    try:
+                        L = open(path, errors="ignore").read().split("\n")
+                        before = "\n".join(L[:s["line"]] + [L[s["line"]][:s["col"]]])
+                    except OSError:
+                        pass
+                prompt = build_prompt(before, a.ctx, a.enrich)
 
                 ids = tok(prompt, return_tensors="pt").input_ids.cuda()
                 n_in = ids.shape[1]
