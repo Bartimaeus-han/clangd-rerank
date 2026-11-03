@@ -1,5 +1,7 @@
 # clangd 자동완성 재정렬 연구 — 보존본 (1차 2026-10-26, 2차 2026-10-27, 3·4·5차 2026-10-27~28)
 
+> 설치해서 쓰려면 **[INSTALL.md](INSTALL.md)** (서버 2개 + VS Code 확장, 셀프호스트). 라이선스 MIT. 모델: Sorter = Qwen3.5-0.8B-Base(Apache-2.0) + 자체 어댑터, Namer = Qwen2.5-Coder-1.5B/7B(Apache-2.0).
+
 clangd가 만든 자동완성 후보의 순서를 결정 모델(Jev, Kev)로 다시 매기는 실험의 결과물.
 조사 문서(배경·선행 연구·결과): https://claude.ai/artifact/PwnEfkhiMjvhugkdv1ofsu
 

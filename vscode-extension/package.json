@@ -1,8 +1,8 @@
 {
   "name": "clangd-rerank",
   "displayName": "clangd Rerank",
-  "description": "Reorders clangd completion items with a small learned ranker (LightGBM + fine-tuned Kev-0.8B) through an LSP proxy. The preselected item is right 3-4x more often.",
-  "version": "0.1.0",
+  "description": "Reorders clangd completion items with a small local model (Sorter) and proposes names at declaration sites (Namer) through an LSP proxy. The preselected item is right 3x more often.",
+  "version": "0.2.0",
   "publisher": "bartimaeus",
   "license": "MIT",
   "engines": {
@@ -172,5 +172,13 @@
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.2.0",
     "typescript": "^5.4.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Bartimaeus-han/clangd-rerank.git"
+  },
+  "homepage": "https://github.com/Bartimaeus-han/clangd-rerank#readme",
+  "bugs": {
+    "url": "https://github.com/Bartimaeus-han/clangd-rerank/issues"
   }
 }

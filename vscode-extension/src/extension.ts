@@ -46,7 +46,9 @@ function realClangd(ctx: vscode.ExtensionContext) {
   return cfg().get<string>('clangdPath', 'clangd');
 }
 
-async function writeLauncher(ctx: vscode.ExtensionContext): Promise<string> {
+/** Writes the launcher. `changed` is true when its content differs from what was on disk, i.e. a clangd
+ *  that was started through the old launcher is running the proxy with stale settings and must be restarted. */
+async function writeLauncher(ctx: vscode.ExtensionContext): Promise<{ file: string; changed: boolean }> {
   const c = cfg();
   const backend = c.get<string>('backend', 'local');
   const python = c.get<string>('pythonPath', 'python3');
@@ -89,9 +91,18 @@ async function writeLauncher(ctx: vscode.ExtensionContext): Promise<string> {
   lines.push(`exec ${shq(python)} -I ${shq(proxy)} "$@"`, '');
   await fs.promises.mkdir(ctx.globalStorageUri.fsPath, { recursive: true, mode: 0o700 });
   const file = launcherPath(ctx);
-  await fs.promises.writeFile(file, lines.join('\n'), { mode: 0o700 });
+  const content = lines.join('\n');
+  let previous: string | undefined;
+  try {
+    previous = await fs.promises.readFile(file, 'utf8');
+  } catch {
+    previous = undefined;
+  }
+  if (previous !== content) {
+    await fs.promises.writeFile(file, content, { mode: 0o700 });
+  }
   await fs.promises.chmod(file, 0o700);
-  return file;
+  return { file, changed: previous !== content };
 }
 
 function checkPython(python: string): string | undefined {
@@ -115,12 +126,13 @@ async function applySuggestSelection() {
   }
 }
 
-async function enable(ctx: vscode.ExtensionContext, restart = true) {
+/** Returns true when clangd must be restarted for the new launcher to take effect (path or content changed). */
+async function enable(ctx: vscode.ExtensionContext, restart = true): Promise<boolean> {
   const warn = checkPython(cfg().get<string>('pythonPath', 'python3'));
   if (warn) {
     vscode.window.showErrorMessage(warn);
     updateStatus('error');
-    return;
+    return false;
   }
   const clangdCfg = vscode.workspace.getConfiguration('clangd');
   const inspected = clangdCfg.inspect<string>('path');
@@ -130,8 +142,9 @@ async function enable(ctx: vscode.ExtensionContext, restart = true) {
   } else if (!current) {
     await ctx.globalState.update(STATE_ORIGINAL_PATH, null);
   }
-  const launcher = await writeLauncher(ctx);
-  if (current !== launcher) {
+  const { file: launcher, changed } = await writeLauncher(ctx);
+  const pathChanged = current !== launcher;
+  if (pathChanged) {
     await clangdCfg.update('path', launcher, vscode.ConfigurationTarget.Global);
   }
   await applySuggestSelection();
@@ -139,7 +152,8 @@ async function enable(ctx: vscode.ExtensionContext, restart = true) {
   if (restart) {
     await restartClangd();
   }
-  output.appendLine(`[${new Date().toISOString()}] enabled: backend=${cfg().get('backend')} launcher=${launcher} clangd=${realClangd(ctx)}`);
+  output.appendLine(`[${new Date().toISOString()}] enabled: backend=${cfg().get('backend')} launcher=${launcher}${changed ? ' (rewritten)' : ''} clangd=${realClangd(ctx)}`);
+  return pathChanged || changed;
 }
 
 async function disable(ctx: vscode.ExtensionContext) {
@@ -250,9 +264,12 @@ export async function activate(ctx: vscode.ExtensionContext) {
     return;
   }
   if (cfg().get<boolean>('enabled', true)) {
-    await enable(ctx, false); // clangd is starting anyway; restarting here would race its first launch
-    const clangdCfg = vscode.workspace.getConfiguration('clangd').get<string>('path', '');
-    if (clangdCfg && !clangdCfg.endsWith(LAUNCHER_NAME)) {
+    // The clangd extension may already have launched clangd through the launcher as it was on disk
+    // (settings from a previous session). If this activation changed clangd.path OR the launcher's
+    // content (new settings such as generateUrl), that clangd runs the proxy with stale environment:
+    // restart it. When nothing changed there is no reason to interrupt the first launch.
+    const needRestart = await enable(ctx, false);
+    if (needRestart) {
       await restartClangd();
     }
   } else {
