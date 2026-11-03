@@ -1,7 +1,7 @@
 """프로젝트 폴더를 주면 컴파일 옵션(compile_flags.txt)과 파일 목록을 자동으로 정해 clangd 샘플을 모은다.
 
 사용: collect_auto.py <out_root> <project_dir> [<project_dir> ...]
-  각 프로젝트마다 <out_root>/<이름>/samples.jsonl 을 만든다 (eval_rerank.py collect 호출).
+  각 프로젝트마다 <out_root>/<이름>/samples.jsonl 을 만든다 (eval_rerank.py collect 호출; COLLECT_SCRIPT=collect_newident.py 면 그 수집기).
 규칙:
   - 언어: 소스 파일 확장자 다수결 (.c 가 많으면 C11, 아니면 C++17). compile_flags.txt 는 프로젝트 전체에 하나뿐이라서.
   - include 경로: 프로젝트 루트, include/, src/, lib/ 와 깊이 3 이내의 모든 include 디렉터리(및 그 부모).
@@ -10,6 +10,7 @@
 import os, subprocess, sys
 
 MAX_FILES = int(os.environ.get("MAX_FILES", "14"))
+SCRIPT = os.environ.get("COLLECT_SCRIPT", "eval_rerank.py")  # collect_newident.py 를 주면 정답이 후보에 없는 자리까지 모은다
 PER_FILE = os.environ.get("EVAL_PER_FILE", "50")
 SKIP = ("test", "bench", "example", "sample", "third_party", "thirdparty", "3rdparty", "extern", "external", "deps",
         "vendor", "fuzz", "contrib", "tools", "docs", "cmake", "build", ".git", "programs/legacy")
@@ -68,7 +69,7 @@ def main():
             f.write("\n".join(flags) + "\n")
         print(f"== {name} ({'C' if is_c else 'C++'}, {len(files)} files, {len(flags) - 2} include dirs)", flush=True)
         env = {**os.environ, "EVAL_ROOT": root, "EVAL_FILES": ",".join(files), "EVAL_TOPDOWN": "1", "EVAL_PER_FILE": PER_FILE}
-        r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "eval_rerank.py"), "collect", os.path.join(out_root, name)],
+        r = subprocess.run([sys.executable, "-I", os.path.join(HERE, SCRIPT)] + (["collect"] if SCRIPT == "eval_rerank.py" else []) + [os.path.join(out_root, name)],
                            env=env, capture_output=True, text=True)
         print((r.stdout.strip().split("\n") or [""])[-1], flush=True)
         if r.returncode:

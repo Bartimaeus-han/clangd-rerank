@@ -100,6 +100,11 @@
           "scope": "machine-overridable",
           "description": "Base URL of the local Kev (System One compatible) server."
         },
+        "clangdRerank.generateUrl": {
+          "type": "string",
+          "default": "",
+          "description": "식별자 생성 서버 주소 (scripts/gen_server.py, 예: http://127.0.0.1:8010). 비우면 생성 끔. 선언 자리(`int `, `auto ` 뒤 등)에서만 새 이름 1~3개를 목록 맨 위에 ✦ 표시로 넣는다 (프로토타입)."
+        },
         "clangdRerank.clangdPath": {
           "type": "string",
           "default": "clangd",

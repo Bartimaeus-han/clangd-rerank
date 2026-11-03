@@ -6,6 +6,7 @@
 3단계(report): 파일 순서대로 VS Code recentlyUsedByPrefix를 흉내 내며 지표 계산.
 
 사용: eval_rerank.py collect|jev|report <out_dir>
+      report 는 RERANK_FILE(기본 jev.jsonl)·RERANK_LABEL(기본 Jev) 로 다른 재정렬기 결과(claude_eval.py 출력)도 같은 표로 찍는다.
 
 환경 변수(collect):
   EVAL_ROOT     프로젝트 루트 (기본: ext/fmt)
@@ -243,10 +244,13 @@ def jev(out_dir):
                 print(f"  {n}/{len(jobs)}", flush=True)
 
 
+LABEL = os.environ.get("RERANK_LABEL", "Jev")  # 표에 찍을 재정렬기 이름
+
+
 def report(out_dir):
     samples = [json.loads(l) for l in open(os.path.join(out_dir, "samples.jsonl"))]
     jv = {}
-    for l in open(os.path.join(out_dir, "jev.jsonl")):
+    for l in open(os.path.join(out_dir, os.environ.get("RERANK_FILE", "jev.jsonl"))):  # Claude 등 다른 재정렬기 결과도 같은 형식
         r = json.loads(l)
         jv[(r["i"], r["k"])] = r
     memory = {}  # VS Code PrefixMemory: 접두어 -> 고른 이름
@@ -302,15 +306,18 @@ def report(out_dir):
     def pct(a, n):
         return f"{100 * a / n:5.1f}%" if n else "  -  "
 
-    print(f"Jev 모델: {', '.join(sorted(models))}")
+    print(f"{LABEL} 모델: {', '.join(sorted(models))}")
     print(f"샘플 위치 {stats['0']['n']}곳, 접두어 0/1/2글자\n")
+    if not stats['0']['n']:
+        print("비교할 완료 위치가 없다 (결과 파일이 비었거나 전부 오류)")
+        return
     print("미리 선택된 항목이 정답인 비율 (R@1)")
-    print("접두어 | clangd | clangd+기억 |   Jev  | Jev+기억 | n")
+    print(f"접두어 | clangd | clangd+기억 |   {LABEL}  | {LABEL}+기억 | n")
     for k, st in stats.items():
         n = st["n"]
         print(f"  {k}글자 | {pct(st['clangd'], n)} |   {pct(st['clangd_mem'], n)}    | {pct(st['jev'], n)} |  {pct(st['jev_mem'], n)}  | {n}")
-    print("\n순서 전체 품질 (기억 기능은 순서를 바꾸지 않으므로 clangd vs Jev만)")
-    print("접두어 | MRR clangd | MRR Jev | R@5 clangd | R@5 Jev")
+    print(f"\n순서 전체 품질 (기억 기능은 순서를 바꾸지 않으므로 clangd vs {LABEL}만)")
+    print(f"접두어 | MRR clangd | MRR {LABEL} | R@5 clangd | R@5 {LABEL}")
     for k, st in stats.items():
         n = st["n"]
         print(f"  {k}글자 |   {st['rr_clangd'] / n:.3f}    |  {st['rr_jev'] / n:.3f}  |   {pct(st['r5_clangd'], n)}   | {pct(st['r5_jev'], n)}")
@@ -327,8 +334,8 @@ def report(out_dir):
     def q(xs, p):
         xs = sorted(xs)
         return xs[min(len(xs) - 1, int(p * len(xs)))]
-    print(f"\n지연: clangd 중앙값 {q(clangd_ms, .5):.0f}ms, Jev 왕복 중앙값 {q(jev_ms, .5):.0f}ms / p90 {q(jev_ms, .9):.0f}ms")
-    print(f"Jev 입력 토큰 합계 {sum(in_tok):,} (요청당 평균 {sum(in_tok) / len(in_tok):.0f})")
+    print(f"\n지연: clangd 중앙값 {q(clangd_ms, .5):.0f}ms, {LABEL} 왕복 중앙값 {q(jev_ms, .5):.0f}ms / p90 {q(jev_ms, .9):.0f}ms")
+    print(f"{LABEL} 입력 토큰 합계 {sum(in_tok):,} (요청당 평균 {sum(in_tok) / len(in_tok):.0f})")
 
 
 if __name__ == "__main__":

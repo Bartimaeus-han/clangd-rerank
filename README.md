@@ -151,6 +151,54 @@ R@1 % — 신선 1,620곳 (괄호: 응용 1,858곳):
    측정하려면 설정 `clangdRerank.recordStats`를 켜고 한참 쓴 뒤 "clangd Rerank: Show usage statistics".
 4. 학습 재현: GPU가 비어 있을 때(`/usr/lib/wsl/lib/nvidia-smi`) scratchpad에서 `./train_v4.sh`(5h19m) → `clangd_test/eval_full.sh ext/kev/runs/clangd-0.8b-v4 v4`(13분) → `python3 -I clangd_test/summarize_compare.py kev_data v2e1 v3s3 v4`.
 
+## Claude API 실험·식별자 생성 준비 (2026-11-02)
+
+`docs/claude_api_and_ident_gen.md` 참고. 스크립트: `scripts/claude_eval.py`(+`run_claude.sh`, 키는 `claude.env`), 모든 자리를 모으는 `scripts/collect_newident.py`(cand/decl/miss/new 분류, `collect_auto.py` 의 `COLLECT_SCRIPT` 로 호출), 생성 채점 `scripts/gen_report.py`.
+`eval_rerank.py report` 는 `RERANK_FILE`/`RERANK_LABEL` 로 다른 재정렬기 결과도 찍는다. 스모크(CLI11 tests 80곳): 후보에 정답 없는 자리 32% 중 실제 선언 자리(decl)는 7.5%, 나머지는 매크로·헤더 누락(miss).
+
+`claude_eval.py compare <dir>`: clangd·Jev·Claude 모델별 R@1/MRR/R@5, 종류별 R@1, 지연, 실제 토큰·비용을 한 표로(2026-11-02 추가; 실행은 키 대기).
+
+### Haiku 5.5 재정렬 결과 (2026-11-02, CLI11 266곳, effort low, 문맥 40줄, 후보 60)
+
+R@1 0/1/2글자: clangd 18.0/55.6/79.3, Jev 69.9/87.6/91.4, **Kev v4 73.7/89.1/93.6**, Haiku 5.5 58.3/82.0/90.6.
+종류별 0글자(clangd/Jev/Kev v4/Haiku): member 24/76/68/64, scope 10/86/64/**83**, ident 19/62/79/**48**.
+Haiku는 scope(`::`)에서는 Jev 수준이지만 ident(가장 많은 종류)에서 크게 약하다: 틀린 80건 중 61건이 직전에 쓴 지역 변수(`app` 등)를 문맥과
+무관하게 다시 고른 경우. 지연 중앙값 1.6초/p90 3.6초로 대화형 완성에는 못 쓴다(Kev 로컬 65ms, Jev 177ms).
+비용 실측: 요청당 입력 1,989·출력 116 토큰(적응형 사고 포함) → 798요청 $0.205, 1,000요청당 $0.26 (Jev $0.07, Kev 0).
+같은 토큰으로 환산하면 Sonnet 5.5 약 $4.1, Opus 5.5 약 $8.3/CLI11 세트(동기 정가). 표 `results/compare-claude-cli60.txt`.
+결론: 값싼 범용 LLM(Haiku)은 0글자에서 Kev v4보다 15%p 낮고 20배 느리다. 상한 측정은 Opus(CLI11 $8)로 한 번 더 할 가치가 있다.
+
+### 식별자 생성 실험 (2026-11-02~03)
+
+**(1) 후보 없이 생성 → 후보에 대응(genmatch)이 후보 주고 고르기보다 낫다.** Haiku CLI11 0글자 R@1: rerank 58.3 → genmatch **74.1** (Kev v4 73.7, Jev 69.9),
+비용은 $0.205 → $0.079 (입력 1,989 → 820 토큰). 후보 60개 목록이 작은 LLM에겐 오히려 방해였다. 신선셋 cand 2,559곳에서는 genmatch 68.4%
+(Kev v4 는 eval_fresh60 에서 76.8%, 자리 집합이 달라 참고치). `claude_eval.py genmatch`, 표 `results/compare-claude-cli60-genmatch.txt`.
+
+**(2) 선언 자리 비율은 10%.** 신선셋 38 저장소 + CLI11/cxxopts/lz4 (miss 50% 넘는 6개 제외) 4,284곳: cand 60.3 / miss 26.3 / **decl 9.9** / new 3.4%.
+miss(전에 나온 이름인데 후보에 없음)는 헤더·매크로 등 clangd 설정 문제가 대부분이라 생성보다 설정으로 풀 일이다.
+생성 평가 세트 `eval_data/eval_gen_fresh/` 3,723곳(신선셋만; cand 2,223 / miss 1,001 / decl 357 / new 142), 수집기 `collect_newident.py`.
+
+**(3) 생성 정확도 (exact@1, 0/1/2글자; `results/gen-fresh-haiku.txt`)**
+
+| 자리 | n | 최근 식별자 복사 | 타입→이름 규칙(`gen_typeheur.py`) | Qwen3.5-0.8B-Base 그대로(`gen_qwen.py`) | Haiku 5.5 generate |
+|---|---|---|---|---|---|
+| decl(새 이름 선언) | 357 | 0.8 / 15.4 / 24.9 | 10.6 / 12.9 / 13.2 | 34.7 / 48.7 / 56.3 | **47.9 / 59.7 / 62.7** |
+| new | 142 | 0 / 0.7 / 0.7 | 0 / 0 / 0 | 26.1 / 44.4 / 50.7 | 63.4 / 66.9 / 74.6 |
+| miss | 1,001 | 1.2 / 39.7 / 53.5 | - | 47.8 / 68.0 / 74.5 | 65.7 / 74.9 / 77.8 |
+| cand(clangd 1위 20.1/51.5/68.7) | 2,223 | 3.9 / 48.4 / 64.8 | - | 53.7 / **77.3 / 82.8** | 62.0 / 69.4 / 68.9 |
+
+exact@1, 접두어 0/1/2글자, 2026-11-03 전체 실행 완료. Haiku exact@5 는 decl 64.7/73.1/79.8. 새로 선언하는 이름의 절반을 문맥만으로 정확히 맞힌다. 비용 11,169요청 $1.44, 지연 1.25초.
+절약 타수(`gen_report.py` 열, 5위 안에 있으면 남은 글자 - 고르는 비용): decl 0글자 남은 8.0자 중 Haiku 3.7자, Qwen 2.3자, 규칙 0.6자.
+- 타입→이름 규칙(JetBrains 식, 모델 없음)은 `adm_context_t* context` 꼴만 맞히고(10%), `size_t from`·`GameState root` 처럼 문맥을 읽어야 하는 이름은 못 한다. 모델이 규칙의 4.5배 → 규칙만으로는 부족.
+- Qwen 기반 모델(파인튜닝 전, 빔 5, 접두어 제약 생성)은 0글자에서 Haiku 의 7할(decl 34.7 vs 47.9), 1~2글자에선 격차가 줄고 cand 에선 Haiku 를 앞선다(제약 생성 효과).
+  0글자 빈 응답 21/357(decl)·360/2,223(cand) 은 `)`·`0` 같은 비식별자 토큰이 빔을 채운 디코딩 문제 → `gen_server.py` 는 첫 토큰을 식별자로 제한한다. 건당 0.53초(HF generate 경로).
+- decl 357곳 구성: 변수·매개변수·멤버 288(81%), 함수명 55(15%), `juce::` 같은 scope 오분류 14(4%). `if (_lock && xSemaphore...` 같은 매크로 미해석 자리도 섞여 있어 분류기 손질이 필요하다.
+
+**(4) 전체 위치 기준 정답률 (후보에 정답 없는 자리까지 포함, 신선셋 3,723곳)**: 0글자 clangd 12.0% → Haiku 생성 1위 61.7%, genmatch 재정렬+생성 60.2%;
+2글자 42.4% → 75.7%(선언 문맥·접두어 맞는 후보 없을 때만 생성 삽입하면 77.4%). 생성이 붙으면 "후보에 정답 없음"으로 깎이던 몫이 대부분 회복된다.
+
+다음: Qwen 전체 결과 → decl 데이터(train_src/train_src2 에서 `collect_newident.py` 로 수집)로 LoRA 파인튜닝 → 프록시에 생성 항목 삽입(설계는 `docs/claude_api_and_ident_gen.md`).
+
 ## 다음 할 일
 
 확장 체감 테스트와 실사용 R@1 수집(v4 서버로) → 후보에 정답이 없는 자리(27~46%)용 식별자 생성 항목,

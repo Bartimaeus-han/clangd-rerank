@@ -59,6 +59,7 @@ async function writeLauncher(ctx: vscode.ExtensionContext): Promise<string> {
     RERANK_CTX_LINES: String(c.get<number>('contextLines', 40)),
     RERANK_TIMEOUT: (c.get<number>('timeoutMs', 400) / 1000).toString(),
     RERANK_SKIP3_TYPED: '0',
+    RERANK_GEN_URL: c.get<string>('generateUrl', ''),
     RERANK_LOG: logPath(ctx),
   };
   if (c.get<boolean>('recordStats', false)) {

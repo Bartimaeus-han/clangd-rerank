@@ -37,6 +37,10 @@ STATS = os.environ.get("RERANK_STATS")
 SKIP3_TYPED = int(os.environ.get("RERANK_SKIP3_TYPED", "0"))
 INSTRUCTIONS = "C++ code with a <CURSOR> marker. Which identifier will the programmer most likely type at <CURSOR>?"
 
+GEN_URL = os.environ.get("RERANK_GEN_URL", "").rstrip("/")   # 비면 생성 끔
+GEN_TIMEOUT = float(os.environ.get("RERANK_GEN_TIMEOUT", "0.8"))
+GEN_N = int(os.environ.get("RERANK_GEN_N", "3"))
+
 STAGE3 = os.environ.get("RERANK_STAGE3", "1") != "0"
 stage2 = None
 if os.environ.get("STAGE2_MODEL"):
@@ -49,6 +53,57 @@ def typed_prefix(state):
     """커서 앞에서 사용자가 치고 있는 식별자 조각"""
     m = re.search(r"[A-Za-z_]\w*$", state.rsplit("<CURSOR>", 1)[0].split("\n")[-1])
     return m.group(0) if m else ""
+
+
+_NOT_TYPE = {"return", "new", "delete", "throw", "case", "goto", "else", "do", "sizeof", "using", "namespace", "operator",
+             "template", "if", "while", "for", "switch", "co_return", "co_await", "co_yield", "and", "or", "not",
+             "const", "static", "volatile", "constexpr", "unsigned", "signed", "typename", "inline", "extern", "mutable",
+             "thread_local", "virtual", "explicit", "friend", "public", "private", "protected", "break", "continue"}
+_TYPE_END = re.compile(r"(?:^|[\s(,;{<])([A-Za-z_][\w:]*)(?:\s*<[^<>]*(?:<[^<>]*>[^<>]*)*>)?\s*(?:[*&]+\s*|\.\.\.\s*)?\s$")
+
+
+def decl_site(state):
+    """커서가 '새 이름을 선언하는 자리'인가: 친 글자 앞이 `Type `, `Type* `, `std::vector<T>& `, `auto ` 꼴이면 참.
+    `return x`, `a = b`, `f(x`, `obj.` 처럼 식 자리는 거짓. (정규식 휴리스틱; 프로토타입)"""
+    line = state.rsplit("<CURSOR>", 1)[0].split("\n")[-1]
+    head = re.sub(r"[A-Za-z_]\w*$", "", line)
+    if not head or head.lstrip().startswith("#"):
+        return False
+    if head[-1] in "*&":  # `Type *name`, `auto &x` (별표가 이름 쪽에 붙은 꼴); `(&x`, `= &x`, `, &x` 는 아니다
+        head = head.rstrip("*&")
+        if not head or not head[-1].isspace():
+            return False
+        head = head + " "
+    if not head[-1].isspace():
+        return False
+    m = _TYPE_END.search(head)
+    if not m:
+        return False
+    if re.search(r"\s[*&]\s*$", head) and re.search(r"&&|\|\||\b(if|while|return)\s*\(", line):
+        return False  # `(a & ` 같은 이항 연산자
+    name = m.group(1).split("::")[-1]
+    return name not in _NOT_TYPE
+
+
+def generate_names(state, typed, existing):
+    """선언 자리에서 생성 서버에 새 이름을 묻는다. 이미 보이는 심볼과 겹치는 이름은 뺀다(가짜 심볼 방지)."""
+    before = state.rsplit("<CURSOR>", 1)[0]
+    if typed:
+        before = before[:-len(typed)]
+    body = json.dumps({"prefix": before, "typed": typed, "n": GEN_N + 2}).encode()
+    req = urllib.request.Request(GEN_URL + "/v1/gen", data=body, method="POST", headers={"content-type": "application/json"})
+    t0 = time.perf_counter()
+    with urllib.request.urlopen(req, timeout=GEN_TIMEOUT) as r:
+        guesses = json.load(r)["guesses"]
+    ms = (time.perf_counter() - t0) * 1000
+    names = [g for g in guesses if g not in existing][:GEN_N]
+    log(f"gen {ms:.0f}ms typed={typed!r} -> {names}")
+    return names
+
+
+def gen_items(names):
+    return [{"label": n, "kind": 6, "detail": "✦ 이름 제안 (생성)", "insertText": n, "filterText": n,
+             "sortText": f"!{i:03d}", "preselect": i == 0} for i, n in enumerate(names)]
 
 
 def stage2_order(items, state):
@@ -293,10 +348,22 @@ def clangd_to_editor(clangd_out, editor_out):
         if key in pending and "result" in msg:
             uri, line, ch = pending.pop(key)
             res = msg["result"]
-            items = res.get("items") if isinstance(res, dict) else res
-            if items:
+            items = (res.get("items") if isinstance(res, dict) else res) or []
+            try:
+                state = state_for(uri, line, ch)
+            except Exception as e:
+                state, items = None, []
+                log(f"state error: {e}")
+            gens = []
+            if state is not None and GEN_URL and decl_site(state):
+                try:  # 선언 자리: 재정렬 대신 이름 생성 (clangd 후보는 보통 비었거나 무관하다)
+                    typed = typed_prefix(state)
+                    gens = generate_names(state, typed, {it.get("filterText") or it["label"].strip() for it in items})
+                except Exception as e:
+                    log(f"gen skipped: {type(e).__name__} {e}")
+            elif items:
                 try:
-                    new, info = rerank(items, state_for(uri, line, ch))
+                    new, info = rerank(items, state)
                     site_open(uri, line, ch, info)
                     if new is not None:
                         if isinstance(res, dict):
@@ -305,6 +372,11 @@ def clangd_to_editor(clangd_out, editor_out):
                             msg["result"] = new
                 except Exception as e:  # 시간 초과 등: clangd 순서 그대로
                     log(f"rerank skipped: {type(e).__name__} {e}")
+            if gens:
+                if isinstance(res, dict):
+                    res["items"] = gen_items(gens) + list(res.get("items") or [])
+                else:
+                    msg["result"] = {"isIncomplete": False, "items": gen_items(gens) + list(res or [])}
         write_msg(editor_out, msg)
 
 

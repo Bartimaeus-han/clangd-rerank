@@ -6,3 +6,5 @@ vscode-extension/node_modules/
 vscode-extension/out/
 *.vsix
 jev.env
+claude.env
+__pycache__/
