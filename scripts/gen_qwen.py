@@ -19,17 +19,23 @@ def main():
     ap.add_argument("--ctx", type=int, default=40); ap.add_argument("--model", default="Qwen/Qwen3.5-0.8B-Base")
     ap.add_argument("--new-tokens", type=int, default=8); ap.add_argument("--tag", default="qwen-base")
     ap.add_argument("--adapter", default="", help="peft LoRA 어댑터 폴더 (Namer 학습본)")
+    ap.add_argument("--load-4bit", action="store_true", help="bitsandbytes NF4 4비트로 올린다 (7B 급을 16GB GPU 에)")
     ap.add_argument("--src-root", default="", help="샘플의 proj/file 이 있는 소스 루트 (파일 전체의 커서 앞부분을 읽는다)")
     ap.add_argument("--enrich", action="store_true", help="ctx_enrich.build_prompt: 앞선 선언 요약을 프롬프트 앞에 붙인다 (--src-root 필요)")
     a = ap.parse_args()
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(a.model)
-    lm = AutoModelForCausalLM.from_pretrained(a.model, dtype=torch.bfloat16)
+    if a.load_4bit:
+        from transformers import BitsAndBytesConfig
+        q = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True)
+        lm = AutoModelForCausalLM.from_pretrained(a.model, quantization_config=q, device_map={"": 0})
+    else:
+        lm = AutoModelForCausalLM.from_pretrained(a.model, dtype=torch.bfloat16)
     if a.adapter:
         from peft import PeftModel
         lm = PeftModel.from_pretrained(lm, a.adapter).merge_and_unload()
-    lm = lm.cuda().eval()
+    lm = (lm if a.load_4bit else lm.cuda()).eval()
     vocab = [tok.decode([t]) for t in range(len(tok))]
     all_ids = list(range(len(tok)))
     allowed_cache = {}

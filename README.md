@@ -233,7 +233,16 @@ LoRA 는 1위 정확도를 못 올리고(exact@5 41.5→47.9, 빈 응답 21→0 
 `ext/kev/.venv/bin/python scripts/gen_server.py --port 8010 --model Qwen/Qwen2.5-Coder-3B --beams 3`.
 
 실사용 기록: 생성(✦) 자리도 `RERANK_STATS` 에 남긴다(제안 목록 `gen`, 드롭다운에서 고른 이름 `accepted`, 최종 이름 `gold`; 생성 자리는 커서가 단어를 떠날 때 닫아 "수락 후 고침"을 잡는다). `rerank_stats.py` 가 생성 표(1위/3위 안, 그대로 수락/수락 후 고침/무시, 고친 예)를 함께 찍는다.
-다음 후보: Coder-1.5B(속도)·Coder-7B 4bit(상한) 측정, 생성 서빙 속도 개선, 실사용 기록으로 선호 이름 학습.
+**라이선스 주의: Qwen2.5-Coder-3B 는 Qwen Research License(비상업·연구용)라 배포 제품에 못 쓴다.** 1.5B·7B 는 Apache-2.0. 출시용 후보를 같은 조건으로 쟀다(`scripts/run_release_models.sh`; `gen_qwen.py`/`gen_server.py` 에 `--load-4bit`(bitsandbytes NF4) 추가):
+
+| 모델 | 라이선스 | decl 0/1/2글자 | new 0글자 | 서버 지연 중앙값/최대 (빔 3) |
+|---|---|---|---|---|
+| Coder-1.5B | Apache-2.0 | 40.3 / 57.7 / 64.7 | 52.8 | 322 / 418ms |
+| Coder-3B | 연구용 | 40.3 / 60.2 / 66.9 | 55.6 | 414 / 623ms |
+| **Coder-7B NF4 4bit** | Apache-2.0 | **45.9 / 62.7 / 68.1** | 55.6 | 572 / 741ms |
+
+출시 구성: 기본 Coder-1.5B(추가 설치 없음, 8GB GPU), 고급 옵션 Coder-7B 4bit(`--model Qwen/Qwen2.5-Coder-7B --load-4bit --beams 3`, bitsandbytes 필요, 16GB GPU).
+다음: 출시 준비(LICENSE 파일·repository 필드·활성화 순서 버그·설치 문서), 생성 서빙 속도 개선, 실사용 기록으로 선호 이름 학습.
 
 ## 다음 할 일
 

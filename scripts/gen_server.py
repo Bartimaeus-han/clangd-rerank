@@ -18,16 +18,21 @@ IDENT = re.compile(r"^[A-Za-z_]\w*")
 
 
 class Generator:
-    def __init__(self, model, adapter, beams, new_tokens, ctx, enrich=True):
+    def __init__(self, model, adapter, beams, new_tokens, ctx, enrich=True, load_4bit=False):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.torch = torch
         self.tok = AutoTokenizer.from_pretrained(model)
-        lm = AutoModelForCausalLM.from_pretrained(model, dtype=torch.bfloat16)
+        if load_4bit:  # 7B 급을 16GB GPU 에: bitsandbytes NF4
+            from transformers import BitsAndBytesConfig
+            q = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True)
+            lm = AutoModelForCausalLM.from_pretrained(model, quantization_config=q, device_map={"": 0})
+        else:
+            lm = AutoModelForCausalLM.from_pretrained(model, dtype=torch.bfloat16)
         if adapter:
             from peft import PeftModel
             lm = PeftModel.from_pretrained(lm, adapter).merge_and_unload()
-        self.lm = lm.cuda().eval()
+        self.lm = (lm if load_4bit else lm.cuda()).eval()
         self.beams, self.new_tokens, self.ctx, self.enrich = beams, new_tokens, ctx, enrich
         vocab = [self.tok.decode([t]) for t in range(len(self.tok))]
         self.all_ids = list(range(len(self.tok)))
@@ -82,8 +87,9 @@ def main():
     ap.add_argument("--adapter", default=""); ap.add_argument("--beams", type=int, default=5)
     ap.add_argument("--new-tokens", type=int, default=8); ap.add_argument("--ctx", type=int, default=40)
     ap.add_argument("--no-enrich", action="store_true", help="앞선 선언 요약(ctx_enrich)을 붙이지 않는다")
+    ap.add_argument("--load-4bit", action="store_true", help="bitsandbytes NF4 4비트로 올린다")
     a = ap.parse_args()
-    g = Generator(a.model, a.adapter, a.beams, a.new_tokens, a.ctx, not a.no_enrich)
+    g = Generator(a.model, a.adapter, a.beams, a.new_tokens, a.ctx, not a.no_enrich, a.load_4bit)
     for typed in ("", "c", "co"):  # 워밍업 (첫 요청 커널 컴파일)
         print("warmup", typed, g.generate("#include <string>\nint main() {\n  std::string ", typed, 3), flush=True)
 
