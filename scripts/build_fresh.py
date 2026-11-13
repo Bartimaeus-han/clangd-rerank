@@ -5,6 +5,7 @@
   - 시험용 라이브러리(fmt, CLI11, lz4, entt, cxxopts)가 번들된 파일은 뺀다.
   - 학습 소스 트리(train_src, train_src2)에 내용이 같은 파일이 있으면 뺀다(복사본 → 모델이 학습 때 본 코드).
   - 주제당 위치 상한 CAP(기본 90, 무작위·고정 시드) — eval_app_sub 와 같은 모양.
+  - qual 자리(v5, 한정 이름 고르기)는 따로 주제당 QUAL_CAP(기본 15)개. 다른 난수를 써서 기존 자리 선택에 영향이 없다.
   - 결과: <out_dir>/samples.jsonl ("project" 필드 추가), <out_dir>/summary.txt (주제별 집계).
 """
 import collections, hashlib, json, os, random, re, sys
@@ -12,6 +13,7 @@ import collections, hashlib, json, os, random, re, sys
 root, out_dir, train_roots = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2]), [os.path.abspath(a) for a in sys.argv[3:]]
 CAP = int(os.environ.get("CAP", "90"))
 SEED = int(os.environ.get("SEED", "0"))
+QUAL_CAP = int(os.environ.get("QUAL_CAP", "15"))
 SRC_ROOT = os.path.abspath(os.environ.get("FRESH_SRC", os.path.expanduser("~/work/clangd-rerank/eval_src_fresh")))
 TEST_LIBS = re.compile(r"(^|/)(fmt/|format\.(h|cc)|CLI11?\.hpp|CLI/|lz4(hc|frame)?\.(c|h)|entt(/|\.hpp)|cxxopts\.hpp)", re.I)
 EXT = (".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".hxx", ".inl", ".ipp")
@@ -62,10 +64,14 @@ for d in sorted(os.listdir(root)):
 
 os.makedirs(out_dir, exist_ok=True)
 sub = []
+qrng = random.Random(f"qual:{SEED}")
 for t, ss in sorted(by_topic.items()):
+    qs = [s for s in ss if s.get("kind") == "qual"]
+    ss = [s for s in ss if s.get("kind") != "qual"]
     rng.shuffle(ss)
-    pick = sorted(ss[:CAP], key=lambda s: (s["project"], s["file"], s["line"], s["col"]))
-    dropped["over_cap"] += max(0, len(ss) - CAP)
+    qrng.shuffle(qs)
+    pick = sorted(ss[:CAP] + qs[:QUAL_CAP], key=lambda s: (s["project"], s["file"], s["line"], s["col"]))
+    dropped["over_cap"] += max(0, len(ss) - CAP) + max(0, len(qs) - QUAL_CAP)
     sub += pick
     st = stats[t]
     st["pos"] = len(pick)
@@ -82,7 +88,7 @@ for t, st in sorted(stats.items(), key=lambda x: -x[1]["pos"]):
     lines.append(f"{t:<19}{st['proj']:>5}{st['raw']:>8}{n:>6}{100*st['member']/max(1,n):>9.1f}{100*st['scope']/max(1,n):>8.1f}")
     tot.update(st)
 n = tot["pos"]
-lines.append(f"합계 {tot['proj']}프로젝트 {len(by_topic)}주제 유효 {tot['raw']}위치 → 채택 {n}위치 (member {100*tot['member']/max(1,n):.1f}%, scope {100*tot['scope']/max(1,n):.1f}%)")
-lines.append(f"제외: 시험 라이브러리 파일 {dropped['test_lib_file']}, 학습 소스와 내용 중복 {dropped['dup_with_train']}, 상한 초과 {dropped['over_cap']} (CAP={CAP}, SEED={SEED})")
+lines.append(f"합계 {tot['proj']}프로젝트 {len(by_topic)}주제 유효 {tot['raw']}위치 → 채택 {n}위치 (member {100*tot['member']/max(1,n):.1f}%, scope {100*tot['scope']/max(1,n):.1f}%, qual {100*tot['qual']/max(1,n):.1f}%)")
+lines.append(f"제외: 시험 라이브러리 파일 {dropped['test_lib_file']}, 학습 소스와 내용 중복 {dropped['dup_with_train']}, 상한 초과 {dropped['over_cap']} (CAP={CAP}, QUAL_CAP={QUAL_CAP}, SEED={SEED})")
 open(os.path.join(out_dir, "summary.txt"), "w").write("\n".join(lines) + "\n")
 print("\n".join(lines))

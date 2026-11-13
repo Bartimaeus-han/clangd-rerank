@@ -39,7 +39,7 @@ def features(sample, k):
     typed = int(k)
     rows, labels = [], []
     for rank, c in enumerate(cands):
-        n = c["name"]
+        n = c.get("base") or c["name"]  # 한정 열쇠(std::string)도 특징은 이름(string)으로
         sub = subtokens(n)
         kind = c.get("kind", "symbol")
         rows.append([

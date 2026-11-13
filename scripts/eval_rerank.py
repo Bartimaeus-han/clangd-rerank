@@ -13,6 +13,11 @@
   EVAL_FILES    쉼표로 구분한 상대 경로 (기본: fmt 파일 목록)
   EVAL_TOPDOWN  1이면 커서 뒤 내용을 clangd와 모델 양쪽에서 지운다 ("위에서부터 새로 쓰는" 상황)
   EVAL_PER_FILE 파일당 유효 샘플 상한 (기본 50)
+  CAND_KEY      name(기본): 같은 이름 후보는 하나로 묶는다(v1~v4 데이터).
+                insert: 실제로 들어가는 글(한정자 포함, 예 std::string / std::pmr::string)이 다르면 다른 후보로 남긴다(v5).
+  EVAL_QUAL_PER_FILE  파일당 qual 자리 상한 (기본 0 = 안 모음). qual 자리: 소스의 `a::b::name` 을 지우고
+                `name` 접두어만 1·2·3글자 친 상황. 정답은 소스에 쓰인 한정 이름 그대로(`a::b::name`). 기존 자리 뽑기와 다른 난수를 써서
+                기존 자리는 v4 때와 같게 뽑힌다.
 """
 import json, os, random, re, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,9 +29,13 @@ FILES = (os.environ["EVAL_FILES"].split(",") if os.environ.get("EVAL_FILES") els
           "test/compile-test.cc", "test/xchar-test.cc", "test/args-test.cc"])
 TOPDOWN = os.environ.get("EVAL_TOPDOWN") == "1"
 PREFIXES = [0, 1, 2]
+QUAL_PREFIXES = [1, 2, 3]  # 0글자에서는 clangd 가 전역 후보를 잘라 한정 이름이 거의 안 들어온다. 실사용도 몇 글자 친 뒤 고른다
 PER_FILE = int(os.environ.get("EVAL_PER_FILE", "50"))  # 파일당 유효 샘플 상한
 OVERSAMPLE = PER_FILE * 3   # 파일당 후보 위치 수 (정답이 후보에 없는 위치는 버린다)
 MAX_CANDS = 255        # Jev Choice 상한
+CAND_KEY = os.environ.get("CAND_KEY", "name")
+QUAL_PER_FILE = int(os.environ.get("EVAL_QUAL_PER_FILE", "0"))
+QUALIFIER = re.compile(r"(?:[A-Za-z_]\w*::)+$")
 CTX_BEFORE, CTX_AFTER = 80, (0 if TOPDOWN else 10)
 
 KEYWORDS = set("""alignas alignof and asm auto bitand bitor bool break case catch char char8_t char16_t
@@ -124,17 +133,45 @@ KIND_NAMES = {1: "text", 2: "method", 3: "function", 4: "constructor", 5: "field
               15: "snippet", 17: "file", 20: "enum member", 21: "constant", 22: "struct", 25: "type parameter"}
 
 
+def cand_key(it, mode=None):
+    """후보를 구분하는 열쇠. name: 이름(filterText). insert: 들어가는 글에서 인자·템플릿을 뗀 것(한정자 포함).
+    clangd_rerank_proxy.py 의 cand_key 와 같아야 한다."""
+    name = it.get("filterText") or it["label"].strip()
+    if (mode or CAND_KEY) != "insert":
+        return name
+    t = (it.get("textEdit") or {}).get("newText") or it.get("insertText") or name
+    t = re.split(r"[(<$\s]", t.strip(), maxsplit=1)[0]
+    return t if t.endswith(name) else name  # 오버로드는 이름이 같아 한 후보로 묶인다
+
+
 def candidates(result):
     items = result["items"] if isinstance(result, dict) else (result or [])
     by_name = {}
     for it in sorted(items, key=lambda x: x["sortText"]):
         name = it.get("filterText") or it["label"].strip()
-        if name not in by_name:
+        key = cand_key(it)
+        if key not in by_name:
             # 설명은 v1 형식을 유지한다 (종류를 설명에 넣으면 Jev 정확도가 떨어졌다). 종류는 따로 보관.
             kind = KIND_NAMES.get(it.get("kind"), "symbol")
             detail = (it["label"].strip() + " -> " + it.get("detail", "")).strip()
-            by_name[name] = {"name": name, "kind": kind, "detail": detail}
+            by_name[key] = {"name": key, "kind": kind, "detail": detail}
+            if key != name:
+                by_name[key]["base"] = name  # 2단계 특징은 이름(base)으로 계산한다
     return list(by_name.values())[:MAX_CANDS]
+
+
+def qual_sites(lines, idents):
+    """(줄, 한정자 시작 열, 마지막 이름, 한정 이름 전체). `x.a::b`, `::a::b` 처럼 앞에 다른 것이 붙은 경우는 뺀다."""
+    out = []
+    for ln, col, w in idents:
+        m = QUALIFIER.search(lines[ln][:col])
+        if not m:
+            continue
+        qs = m.start()
+        if lines[ln][:qs].rstrip().endswith((".", "->", ":")) or lines[ln][col + len(w):].lstrip().startswith("::"):
+            continue  # 앞에 다른 것이 붙었거나, 한정 이름의 중간(std::pmr::string 의 std::pmr)
+        out.append((ln, qs, w, m.group(0) + w))
+    return out
 
 
 def collect(out_dir):
@@ -149,20 +186,27 @@ def collect(out_dir):
         lines = src.split("\n")
         idents = code_identifiers(src)
         picks = sorted(rng.sample(idents, min(OVERSAMPLE, len(idents))))
+        picks = [(ln, col, w, w, col, PER_FILE, None) for ln, col, w in picks]
+        if QUAL_PER_FILE:  # 따로 난수를 써서 기존 자리 뽑기를 건드리지 않는다
+            quals = qual_sites(lines, idents)
+            qrng = random.Random(f"qual:{rel}")
+            picks += sorted((ln, qs, w, full, qs, QUAL_PER_FILE, "qual")
+                            for ln, qs, w, full in qrng.sample(quals, min(QUAL_PER_FILE * 3, len(quals))))
+        kept_by = {None: 0, "qual": 0}
         lang = "c" if rel.endswith(".c") else "cpp"
         cd.notify("textDocument/didOpen", {"textDocument": {"uri": uri, "languageId": lang, "version": 1, "text": src}})
         while cd.recv().get("method") != "textDocument/publishDiagnostics":
             pass
         ver, kept = 1, 0
-        for ln, col, w in picks:
-            if kept >= PER_FILE:
-                break
+        for ln, col, w, gold, _, cap, special in picks:
+            if kept_by[special] >= cap:
+                continue
             total_tried += 1
             lead = lines[ln][:col].rstrip()
-            kind = ("member" if lead.endswith((".", "->")) else "scope" if lead.endswith("::") else "ident")
-            rec = {"file": rel, "line": ln, "col": col, "gold": w, "kind": kind, "levels": {}}
+            kind = special or ("member" if lead.endswith((".", "->")) else "scope" if lead.endswith("::") else "ident")
+            rec = {"file": rel, "line": ln, "col": col, "gold": gold, "kind": kind, "levels": {}}
             ok = True
-            for k in PREFIXES:
+            for k in (QUAL_PREFIXES if special == "qual" else PREFIXES):
                 if k >= len(w):
                     ok = False
                     break
@@ -177,16 +221,19 @@ def collect(out_dir):
                 ms = (time.perf_counter() - t0) * 1000
                 cands = candidates(res)
                 names = [c["name"] for c in cands]
-                if w not in names:
+                if gold not in names:
+                    if special == "qual":  # clangd 가 결과 상한(300)에서 잘랐다. 들어온 글자 수만 남긴다
+                        continue
                     ok = False
                     break
                 before = lines[max(0, ln - CTX_BEFORE):ln]
                 after = lines[ln + 1:ln + 1 + CTX_AFTER]
                 state = "\n".join(before + [cur + "<CURSOR>"] + after)
                 rec["levels"][str(k)] = {"cands": cands, "clangd_ms": ms, "state": state}
-            if ok:
+            if ok and rec["levels"]:
                 out.write(json.dumps(rec) + "\n")
                 kept += 1
+                kept_by[special] += 1
                 total_kept += 1
         cd.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
         print(f"{rel}: 유효 {kept}개", flush=True)

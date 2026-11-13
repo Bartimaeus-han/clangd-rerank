@@ -5,6 +5,7 @@
   - 시험셋 저장소(주제별 1개)는 학습에서 완전히 뺀다 → <out_test_dir>/samples.jsonl (모든 위치).
   - 시험용 라이브러리(fmt, CLI11, lz4, entt, cxxopts)가 번들된 파일, 다른 저장소에 복사된 같은 파일(내용 해시 중복)은 뺀다.
   - 프로젝트당 위치 상한 CAP(기본 100, 무작위·고정 시드), codecontests 는 CC_CAP(기본 1000).
+  - qual 자리(v5, 한정 이름 고르기)는 따로 프로젝트당 QUAL_CAP(기본 15)개. 다른 난수를 써서 기존 자리 선택은 v4 와 같게 한다.
   - 결과: <out_sel_dir>/<프로젝트>/samples.jsonl, sources.txt(경로 목록), summary.txt(주제별 집계).
 """
 import collections, hashlib, json, os, random, re, sys
@@ -13,6 +14,8 @@ root, pick_path, out_sel, out_test = [os.path.abspath(a) for a in sys.argv[1:5]]
 CAP = int(os.environ.get("CAP", "100"))
 CC_CAP = int(os.environ.get("CC_CAP", "1000"))
 SEED = int(os.environ.get("SEED", "0"))
+QUAL_CAP = int(os.environ.get("QUAL_CAP", "15"))
+qrng = random.Random(f"qual:{SEED}")
 SRC_ROOT = os.path.abspath(os.environ.get("TRAIN_SRC", os.path.expanduser("~/work/clangd-rerank/train_src2")))  # samples 의 file 은 프로젝트 상대 경로
 TEST_LIBS = re.compile(r"(^|/)(fmt/|format\.(h|cc)|CLI11?\.hpp|CLI/|lz4(hc|frame)?\.(c|h)|entt(/|\.hpp)|cxxopts\.hpp)", re.I)
 
@@ -59,11 +62,18 @@ for d in sorted(os.listdir(root)):
             dropped["dup_file"] += 1
             continue
         kept.append(s)
+    quals = [s for s in kept if s.get("kind") == "qual"]
+    kept = [s for s in kept if s.get("kind") != "qual"]
     cap = CC_CAP if topic == "codecontests" else CAP
     if len(kept) > cap:
         rng.shuffle(kept)
         dropped["over_cap"] += len(kept) - cap
         kept = sorted(kept[:cap], key=lambda s: (s["file"], s["line"], s["col"]))
+    if len(quals) > QUAL_CAP:
+        qrng.shuffle(quals)
+        dropped["over_qual_cap"] += len(quals) - QUAL_CAP
+        quals = quals[:QUAL_CAP]
+    kept = sorted(kept + quals, key=lambda s: (s["file"], s["line"], s["col"]))
     if not kept:
         continue
     od = os.path.join(out_sel, d)
@@ -86,7 +96,7 @@ for t, st in sorted(stats.items(), key=lambda x: -x[1]["pos"]):
     lines.append(f"{t:<19}{st['proj']:>8}{n:>7}{100*st['member']/max(1,n):>9.1f}{100*st['scope']/max(1,n):>8.1f}{st['test_proj']:>9}{st['test_pos']:>9}")
     tot.update(st)
 n = tot["pos"]
-lines.append(f"합계 학습 {tot['proj']}프로젝트 {n}위치 (member {100*tot['member']/max(1,n):.1f}%, scope {100*tot['scope']/max(1,n):.1f}%); 시험 {tot['test_proj']}프로젝트 {n_test}위치")
-lines.append(f"제외: 시험 라이브러리 파일 {dropped['test_lib_file']}, 중복 파일 {dropped['dup_file']}, 상한 초과 {dropped['over_cap']} (CAP={CAP}, CC_CAP={CC_CAP}, SEED={SEED})")
+lines.append(f"합계 학습 {tot['proj']}프로젝트 {n}위치 (member {100*tot['member']/max(1,n):.1f}%, scope {100*tot['scope']/max(1,n):.1f}%, qual {100*tot['qual']/max(1,n):.1f}%); 시험 {tot['test_proj']}프로젝트 {n_test}위치")
+lines.append(f"제외: 시험 라이브러리 파일 {dropped['test_lib_file']}, 중복 파일 {dropped['dup_file']}, 상한 초과 {dropped['over_cap']}, qual 상한 초과 {dropped['over_qual_cap']} (CAP={CAP}, CC_CAP={CC_CAP}, QUAL_CAP={QUAL_CAP}, SEED={SEED})")
 open(os.path.join(out_sel, "summary.txt"), "w").write("\n".join(lines) + "\n")
 print("\n".join(lines))

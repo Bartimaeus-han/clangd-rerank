@@ -16,6 +16,9 @@ VS Code 설정: "clangd.path": "<이 파일>", "clangd.arguments": [...] (인자
   STAGE2_MODEL      2단계 LightGBM 모델 파일(stage1_ranker.py 출력). 주면 clangd 후보 전체를 2단계로 먼저 매겨
                     상위 RERANK_MAX_CANDS개만 3단계(모델)에 보낸다. 같은 폴더의 stage2_lite.py(표준 라이브러리만)로 평가한다.
   RERANK_STAGE3     0이면 3단계(모델 호출)를 끄고 2단계 순서만 쓴다 (기본 1)
+  RERANK_CAND_KEY   insert(기본): 실제로 들어가는 글(한정자 포함)이 다르면 다른 후보로 보내 모델이 고르게 한다
+                    (std::string / std::pmr::string). Sorter v5 가 이 형식으로 학습됐고, v4 도 이쪽이 더 낫다(신선셋 83.9→86.2%).
+                    name: 같은 이름 후보를 하나로 묶는다(옛 방식; 묶음 안에서는 clangd 순서).
   RERANK_SKIP3_TYPED 친 글자 수가 이 값 이상이면 3단계를 건너뛰고 2단계 순서만 쓴다 (기본 0 = 항상 3단계; 2차 모델은 2글자에서도 2단계보다 8~9%p 높았다)
 
 동작: 에디터 -> 프록시 -> clangd 는 그대로 전달. clangd -> 에디터 중 completion 응답은
@@ -35,6 +38,7 @@ CTX_LINES = int(os.environ.get("RERANK_CTX_LINES", "40"))
 LOG = os.environ.get("RERANK_LOG")
 STATS = os.environ.get("RERANK_STATS")
 SKIP3_TYPED = int(os.environ.get("RERANK_SKIP3_TYPED", "0"))
+CAND_KEY = os.environ.get("RERANK_CAND_KEY", "insert")
 INSTRUCTIONS = "C++ code with a <CURSOR> marker. Which identifier will the programmer most likely type at <CURSOR>?"
 
 GEN_URL = os.environ.get("RERANK_GEN_URL", "").rstrip("/")   # 비면 생성 끔
@@ -113,16 +117,27 @@ def gen_items(names):
              "sortText": f"!{i:03d}", "preselect": i == 0} for i, n in enumerate(names)]
 
 
+def cand_key(it):
+    """후보 열쇠. name: 이름(filterText). insert: 들어가는 글에서 인자·템플릿을 뗀 것(한정자 포함, 예 std::pmr::string).
+    학습 데이터 수집기(eval_rerank.py cand_key)와 같아야 한다."""
+    name = it.get("filterText") or it["label"].strip()
+    if CAND_KEY != "insert":
+        return name
+    t = (it.get("textEdit") or {}).get("newText") or it.get("insertText") or name
+    t = re.split(r"[(<$\s]", t.strip(), maxsplit=1)[0]
+    return t if t.endswith(name) else name  # 오버로드는 이름이 같아 한 후보로 묶인다
+
+
 def stage2_order(items, state):
-    """2단계: clangd 후보 전체(이름 단위)를 LightGBM 점수 순으로. (이름 목록, 이름->항목들)"""
+    """2단계: clangd 후보 전체(열쇠 단위)를 LightGBM 점수 순으로. (열쇠 목록, 열쇠->항목들)"""
     name_of = {}
     for it in sorted(items, key=lambda it: it.get("sortText", it["label"])):
-        name = it.get("filterText") or it["label"].strip()
-        name_of.setdefault(name, []).append(it)
+        name_of.setdefault(cand_key(it), []).append(it)
     names = list(name_of)
     if stage2 is None or len(names) < 2:
         return names, name_of
-    cands = [{"name": n, "kind": "symbol", "detail": (name_of[n][0]["label"].strip() + " -> " + name_of[n][0].get("detail", "")).strip()}
+    cands = [{"name": n, "base": name_of[n][0].get("filterText") or name_of[n][0]["label"].strip(), "kind": "symbol",
+              "detail": (name_of[n][0]["label"].strip() + " -> " + name_of[n][0].get("detail", "")).strip()}
              for n in names]
     order = stage2_lite.order(stage2, cands, state, len(typed_prefix(state)))
     return [names[i] for i in order], name_of
@@ -133,6 +148,7 @@ lock = threading.Lock()
 sites = {}           # 실사용 측정: (uri, line, 단어 시작 col) -> {"levels": {친 글자 수: {순서 이름: [이름...]}}, "t", "away"}
 sites_lock = threading.Lock()
 IDENT = re.compile(r"[A-Za-z_]\w*")
+QUAL_IDENT = re.compile(r"(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*")
 
 
 def log(msg):
@@ -270,10 +286,15 @@ def site_close(key, text, force=False):
     if not word:
         return
     name = os.path.basename(uri)
+    qual = QUAL_IDENT.match(ltxt[col:]).group(0)  # 실제로 들어간 글(std::pmr::string 등)
+    # insert: 들어간 글 전체가 열쇠. name: 이름(마지막 조각) — 첫 조각(std)을 읽으면 한정 이름을 고른 자리가 통계에서 빠진다
+    gold = qual if CAND_KEY == "insert" else qual.rsplit("::", 1)[-1]
     with open(STATS, "a") as f:
         for typed_len, orders in sorted(s["levels"].items()):
-            rank = {k: (o.index(word) + 1 if word in o else None) for k, o in orders.items()}
-            rec = {"t": int(s["t"]), "file": name, "line": line, "typed": typed_len, "gold": word, "n": len(orders["clangd"]), "rank": rank}
+            rank = {k: (o.index(gold) + 1 if gold in o else None) for k, o in orders.items()}
+            rec = {"t": int(s["t"]), "file": name, "line": line, "typed": typed_len, "gold": gold, "n": len(orders["clangd"]), "rank": rank}
+            if qual != gold:
+                rec["ins"] = qual
             if s.get("kind") == "gen":  # 생성 자리: 제안 목록과 '드롭다운에서 실제 고른 이름'(없으면 무시한 것) 도 남긴다
                 rec.update(kind="gen", gen=orders.get("gen", []), accepted=s.get("accepted"))
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
