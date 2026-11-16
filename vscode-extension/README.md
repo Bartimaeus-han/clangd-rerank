@@ -1,9 +1,9 @@
-# clangd Rerank (v0.2)
+# clangd Rerank (v0.3)
 
 clangd 자동완성을 로컬 소형 모델로 보강하는 VS Code 확장. 두 가지를 한다.
 
-- **Sorter**: clangd 가 만든 후보의 **순서만** 다시 매긴다. 2단계 특징 랭커(LightGBM, 0.3ms) + 3단계 결정 모델(파인튜닝한 Kev-0.8B 로컬 서버). 빈 접두어에서 미리 선택된 항목이 정답인 비율이 clangd 기본 27% → 77% (신선 공개 프로젝트 38개, 상위 README 참고).
-- **Namer** (선택): 새 이름을 선언하는 자리(`int `, `auto ` 뒤 등)에서만 이름 후보 1~3개를 목록 맨 위에 `✦` 항목으로 넣는다. 인라인 고스트 텍스트가 아니라 평소 드롭다운 그대로 Tab/Enter 로 고른다. Qwen2.5-Coder-1.5B/7B 로컬 서버, 0글자에서 40~46% 정확, 한 글자 치면 58~63%.
+- **Sorter**: clangd 가 만든 후보의 **순서만** 다시 매긴다. 2단계 특징 랭커(LightGBM, 0.3ms) + 3단계 결정 모델(파인튜닝한 Kev-0.8B 로컬 서버). 빈 접두어에서 미리 선택된 항목이 정답인 비율이 clangd 기본 27% → 77% (신선 공개 프로젝트 38개, 상위 README 참고). v5 부터는 같은 이름의 변형(`std::string` / `std::pmr::string` 등)도 구분해 고른다.
+- **Namer** (선택): 새 이름을 선언하는 자리(`int `, `auto ` 뒤 등)에서만 이름 후보 1~3개를 목록 맨 위에 `✦` 항목으로 넣는다. 인라인 고스트 텍스트가 아니라 평소 드롭다운 그대로 Tab/Enter 로 고른다. llama.cpp 로 돌리는 Qwen2.5-Coder-7B 로컬 서버, 0글자에서 48% 정확, 한 글자 치면 64%, 응답 약 0.1초.
 
 설치는 상위 폴더의 **[INSTALL.md](../INSTALL.md)** 를 따른다 (서버 2개 + 확장). 코드는 내 GPU 밖으로 나가지 않는다.
 
@@ -27,10 +27,10 @@ clangd 자동완성을 로컬 소형 모델로 보강하는 VS Code 확장. 두 
 | `jev` | TypeSafe API 키 (명령 "clangd Rerank: Set Jev API key") | 커서 앞 40줄 + 후보 이름이 api.typesafe.ai 로 전송 |
 | `stage2Only` | 없음 | 어디에도 안 감 (정확도는 낮음) |
 
-로컬 서버 띄우기(상위 폴더 `models/kev-0.8b-clangd-v4` 기준, jaredpalmer/kev 저장소 venv에서):
+로컬 서버 띄우기(상위 폴더 `models/kev-0.8b-clangd-v5` 기준, jaredpalmer/kev 저장소 venv에서):
 
 ```bash
-KEV_CUDA_GRAPHS=0 KEV_PREFIX_CACHE=0 python -m kev.serve --run ../models/kev-0.8b-clangd-v4 --port 8009 --host 127.0.0.1
+KEV_CUDA_GRAPHS=0 KEV_PREFIX_CACHE=0 python -m kev.serve --run ../models/kev-0.8b-clangd-v5 --port 8009 --host 127.0.0.1
 ```
 
 ## 개발
@@ -40,8 +40,8 @@ cd vscode-extension
 npm install
 npm run compile          # out/extension.js
 # 디버그: 이 폴더를 VS Code로 열고 F5 (Extension Development Host)
-npx vsce package         # clangd-rerank-0.1.0.vsix
-code --install-extension clangd-rerank-0.1.0.vsix   # 원격 창이면 원격 쪽에 설치된다
+npx vsce package         # clangd-rerank-0.3.0.vsix
+code --install-extension clangd-rerank-0.3.0.vsix   # 원격 창이면 원격 쪽에 설치된다
 ```
 
 `resources/`에는 프록시(`clangd_rerank_proxy.py`, `stage2_lite.py`)와 2단계 모델(`stage2_v2_lgb.txt`)이 들어 있다.

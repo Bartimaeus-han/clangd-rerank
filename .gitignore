@@ -8,3 +8,5 @@ vscode-extension/out/
 jev.env
 claude.env
 __pycache__/
+# 설치하며 받는 것 (INSTALL.md: Kev, llama venv, GGUF)
+ext/
